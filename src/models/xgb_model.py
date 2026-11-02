@@ -1,8 +1,13 @@
 """
-Walk-forward XGBoost model for NBA win probability.
+Walk-forward XGBoost for NBA win probability.
 
-Tabular features: Elo diff, Net Rating, rest, B2B, games played, form.
-Train only on past games; early stopping on a validation slice.
+Expanded tabular features (40):
+- Core: Elo, Net Rating, rest, B2B
+- Form: L5/L10 win rate, margin L5, streaks
+- Schedule density: games in last 7 days
+- Off/Def proxies: rolling pts for/against
+- Home/away splits
+- Season progress, Elo momentum
 """
 
 from __future__ import annotations
@@ -31,20 +36,44 @@ FEAT_NAMES = [
     "h_games",
     "a_games",
     "elo_margin_pts",
-    "form_h",
-    "form_a",
+    "h_form5",
+    "a_form5",
+    "form5_diff",
+    "h_form10",
+    "a_form10",
+    "form10_diff",
+    "h_margin5",
+    "a_margin5",
+    "margin5_diff",
+    "h_streak",
+    "a_streak",
+    "h_games7d",
+    "a_games7d",
+    "density_diff",
+    "h_off",
+    "a_off",
+    "h_def",
+    "a_def",
+    "off_diff",
+    "def_edge",
+    "h_home_wr",
+    "a_away_wr",
+    "season_progress",
+    "elo_mom_h",
+    "elo_mom_a",
+    "elo_mom_diff",
 ]
 
 DEFAULT_PARAMS = dict(
     objective="binary:logistic",
     eval_metric="logloss",
-    max_depth=3,
-    learning_rate=0.05,
-    subsample=0.8,
-    colsample_bytree=0.8,
-    reg_lambda=2.0,
-    reg_alpha=0.5,
-    min_child_weight=20,
+    max_depth=4,
+    learning_rate=0.04,
+    subsample=0.85,
+    colsample_bytree=0.75,
+    reg_lambda=3.0,
+    reg_alpha=0.8,
+    min_child_weight=25,
 )
 
 
@@ -54,9 +83,9 @@ def train_xgb(
     X_val: Optional[np.ndarray] = None,
     y_val: Optional[np.ndarray] = None,
     params: Optional[dict] = None,
-    num_boost_round: int = 300,
-    early_stopping_rounds: int = 25,
-) -> xgb.Booster:
+    num_boost_round: int = 400,
+    early_stopping_rounds: int = 30,
+) -> "xgb.Booster":
     p = {**DEFAULT_PARAMS, **(params or {})}
     dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=FEAT_NAMES)
     evals = [(dtrain, "train")]
@@ -74,8 +103,7 @@ def train_xgb(
     return model
 
 
-def predict_proba(model: xgb.Booster, X: np.ndarray, shrink: float = 0.08) -> np.ndarray:
-    """Predict P(home win) with mild shrink toward 0.5 for calibration."""
+def predict_proba(model: "xgb.Booster", X: np.ndarray, shrink: float = 0.08) -> np.ndarray:
     d = xgb.DMatrix(X, feature_names=FEAT_NAMES)
     p = model.predict(d)
     p = (1.0 - shrink) * p + shrink * 0.5
@@ -87,11 +115,7 @@ def walk_forward_xgb(
     y: np.ndarray,
     min_train: int = 600,
     block: int = 250,
-) -> Tuple[np.ndarray, List[xgb.Booster]]:
-    """
-    Expanding-window walk-forward.
-    Returns predictions aligned with X (nan before min_train) and list of models.
-    """
+) -> Tuple[np.ndarray, List]:
     N = len(y)
     preds = np.full(N, np.nan)
     models = []
