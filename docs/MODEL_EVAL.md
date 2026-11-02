@@ -1,74 +1,55 @@
-# Model Re-Evaluation & LSTM Plan
+# Model Re-Evaluation & LSTM Results
 
-## Baseline (v1.5) – Walk-forward ~1,049 games (2025-26 season)
+## Baseline Elo+Net (v1.5) – 2 seasons (~2497 games)
 
-| Metric | Value | Comment |
-|--------|-------|--------|
-| Accuracy (favorite) | **66.7%** | Competitive for NBA |
-| Brier | **0.425** | Acceptable; room to improve |
-| Log Loss | **0.616** | |
-| High-conf (≥68%) hit | **74.9%** | Strong separation |
-| Margin correlation | **0.44** | Still under-predicts large margins |
-| Mean \|pred margin\| | 8.0 vs actual 13.3 | Conservative |
+| Metric | Value |
+|--------|-------|
+| Accuracy | **66.5–67.8%** |
+| Brier (home) | ~0.21 |
+| High-conf (≥68%) hit | **~75–76%** |
 
-### Strengths
-- Clean walk-forward (no look-ahead)
-- Confidence buckets behave correctly
-- Calibration improved after Platt scaling
-- B2B / rest effects included
+---
 
-### Gaps vs quant goal
-1. No market odds → cannot compute true +EV yet
+## LSTM Walk-Forward (OOS blocks, n=1497)
+
+Retrain every 250 games; train only on past; early stopping on val loss.
+
+| Model | Accuracy | Brier | LogLoss | High≥68% hit |
+|-------|----------|-------|---------|--------------|
+| **Elo+Net** | **67.8%** | **0.209** | 0.606 | 76.2% (n=762) |
+| LSTM only | 64.7% | 0.221 | 0.633 | 77.2% (n=408) |
+| **Ensemble 55% Elo + 45% LSTM** | 67.6% | **0.209** | **0.605** | **79.3%** (n=581) |
+
+### Interpretation
+- LSTM alone is weaker overall (less data + short sequences) but competitive in high-confidence subset.
+- Ensemble **preserves Elo accuracy** and **improves high-confidence hit rate** (79.3% vs 76.2%).
+- LogLoss slightly better for ensemble → better probability quality for EV/Kelly later.
+
+### Design notes
+- Input: last 10 games × 6 features (margin, pts_for/against, rest, B2B, is_home) for home and away.
+- Dual-stream LSTM → concat → MLP → P(home).
+- Strict `as_of_ts` filter (no look-ahead).
+- Regularization: dropout 0.25, weight decay, early stopping.
+
+---
+
+## Gaps still open
+1. No market odds → no true +EV yet
 2. No injury / lineup features
-3. Margin still conservative
-4. No sequence model (form momentum beyond simple net rating)
-5. No XGBoost / deep ensemble
-6. No realistic vig / limits / latency in backtest PnL
+3. No XGBoost tabular model yet
+4. Margin still conservative
+5. No vig / limits simulation in PnL backtest
 
 ---
 
-## Deep Learning Addition (LSTM)
+## Next steps
+1. XGBoost on tabular features (Elo diff, net diff, rest, B2B, …)
+2. Odds layer (Polymarket/Kalshi or ESPN when available) → EV + Kelly
+3. Full bankroll simulation with stop-loss rules
+4. Paper-trading log
 
-### Design
-- **Input**: last 10 games for home + last 10 for away
-  - Features per game: margin, pts_for, pts_against, rest, B2B, is_home
-- **Architecture**: dual-stream LSTM → concat final hidden → MLP → P(home win)
-- **Training**: walk-forward only (train on past, validate on next block)
-- **Role**: capture short-term form / momentum that Elo smooths out
-
-### Integration
-```
-P_final = w_elo * P_elo + w_xgb * P_xgb + w_lstm * P_lstm
-```
-Weights from inverse Brier (or learned on a hold-out).
-
-### Expected benefit
-- Better handling of hot/cold streaks
-- Slight lift in high-confidence accuracy
-- Better margin estimates when form diverges from long-term Elo
-
-### Risks
-- Overfitting on small sequences → strong regularization + early stopping
-- Data leakage if sequences include future games → strict `as_of_ts` filter
-
----
-
-## Next concrete steps
-
-1. **Data pipeline** – bulk historical games + closing odds (or proxy from prediction markets)
-2. **Feature store** – Elo, Net Rating, rest, B2B, sequence tensors for LSTM
-3. **Train LSTM** walk-forward and measure lift vs Elo-only
-4. **XGB baseline** on tabular features
-5. **Ensemble + calibration**
-6. **+EV layer** – de-vig market odds, EV filter, fractional Kelly
-7. **Risk engine** – circuit breakers, paper-trading log
-8. **Forward test** – at least one full season paper before any real capital
-
----
-
-## Success gate before real money
-
-- Walk-forward + out-of-sample ROI > 0 after 5% vig assumption
-- Max drawdown within configured stop rules
-- Calibration plot close to diagonal on recent seasons
-- No look-ahead or survivorship artifacts in audit
+## Success gate before real capital
+- Walk-forward ROI > 0 after ~5% vig over ≥1 full season
+- Max DD within stop rules
+- Calibration stable
+- No look-ahead in audit
