@@ -1,55 +1,56 @@
-# Model Re-Evaluation & LSTM Results
+# Model Evaluation — Elo / XGBoost / LSTM
 
-## Baseline Elo+Net (v1.5) – 2 seasons (~2497 games)
+Walk-forward on 2 NBA seasons (~2497 games). All models train only on past data.
 
-| Metric | Value |
-|--------|-------|
-| Accuracy | **66.5–67.8%** |
-| Brier (home) | ~0.21 |
-| High-conf (≥68%) hit | **~75–76%** |
-
----
-
-## LSTM Walk-Forward (OOS blocks, n=1497)
-
-Retrain every 250 games; train only on past; early stopping on val loss.
+## Out-of-sample comparison (n=1497)
 
 | Model | Accuracy | Brier | LogLoss | High≥68% hit |
 |-------|----------|-------|---------|--------------|
-| **Elo+Net** | **67.8%** | **0.209** | 0.606 | 76.2% (n=762) |
+| **Elo+Net (v1.5)** | **67.8%** | **0.209** | 0.606 | 76.2% (n=762) |
+| XGBoost | 66.7% | 0.214 | 0.618 | 77.6% (n=572) |
 | LSTM only | 64.7% | 0.221 | 0.633 | 77.2% (n=408) |
-| **Ensemble 55% Elo + 45% LSTM** | 67.6% | **0.209** | **0.605** | **79.3%** (n=581) |
+| Ensemble 50% Elo + 50% XGB | 67.4% | 0.209 | 0.605 | 77.6% (n=657) |
+| Ensemble 55% Elo + 45% LSTM | 67.6% | 0.209 | 0.605 | 79.3% (n=581) |
+| **Triple Elo+XGB+LSTM** | 67.3% | **0.209** | **0.605** | **79.3%** (n=603) |
 
-### Interpretation
-- LSTM alone is weaker overall (less data + short sequences) but competitive in high-confidence subset.
-- Ensemble **preserves Elo accuracy** and **improves high-confidence hit rate** (79.3% vs 76.2%).
-- LogLoss slightly better for ensemble → better probability quality for EV/Kelly later.
+### Takeaways
+- **Elo remains the strongest single model** on accuracy and Brier.
+- XGBoost and LSTM add value mainly in **high-confidence** regions and slight LogLoss improvement when ensembled.
+- Triple ensemble matches best LogLoss and best high-conf hit rate → preferred for betting filters (+EV / Kelly).
 
-### Design notes
-- Input: last 10 games × 6 features (margin, pts_for/against, rest, B2B, is_home) for home and away.
-- Dual-stream LSTM → concat → MLP → P(home).
-- Strict `as_of_ts` filter (no look-ahead).
-- Regularization: dropout 0.25, weight decay, early stopping.
-
----
-
-## Gaps still open
-1. No market odds → no true +EV yet
-2. No injury / lineup features
-3. No XGBoost tabular model yet
-4. Margin still conservative
-5. No vig / limits simulation in PnL backtest
+### XGBoost top features (gain)
+1. `net_diff`
+2. `elo_margin_pts`
+3. `elo_diff`
+4. `h_b2b`
+5. rest / Elo levels
 
 ---
 
-## Next steps
-1. XGBoost on tabular features (Elo diff, net diff, rest, B2B, …)
-2. Odds layer (Polymarket/Kalshi or ESPN when available) → EV + Kelly
-3. Full bankroll simulation with stop-loss rules
+## Architecture summary
+
+| Component | Role |
+|-----------|------|
+| Adaptive Elo + Net Rating | Long-term strength + recent form |
+| XGBoost | Non-linear tabular interactions |
+| LSTM | Short sequence momentum (last 10 games) |
+| Platt-style calibration | Reduce overconfidence |
+| Ensemble weights | ~45% Elo / 35% XGB / 20% LSTM (tunable) |
+
+---
+
+## Still missing for +EV system
+1. Market odds (de-vig) → true EV
+2. Injury / lineup features
+3. Bankroll simulation + stop-loss rules
 4. Paper-trading log
+
+## Next
+1. Odds layer (Polymarket / Kalshi / ESPN) + EV filter + fractional Kelly
+2. Full risk simulation
+3. Paper forward test
 
 ## Success gate before real capital
 - Walk-forward ROI > 0 after ~5% vig over ≥1 full season
 - Max DD within stop rules
-- Calibration stable
-- No look-ahead in audit
+- Calibration stable / no look-ahead
