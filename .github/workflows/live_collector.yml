@@ -1,16 +1,19 @@
 # ORACLE-NBA Path A — sparse live collector
-# Runs every 15 minutes. Only writes when a game is inside T-6h / T-1h / T-10m window.
+# Every 15 min. Writes only when a game is inside T-6h / T-1h / T-10m (±12 min).
 name: live-collector
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # every 15 min UTC
+    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
         description: "Dry run (no CSV write, no Telegram send)"
         type: boolean
-        default: true
+        default: false
+
+permissions:
+  contents: write
 
 jobs:
   collect:
@@ -32,8 +35,7 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python scripts/live_collector.py --dry-run
+        run: python scripts/live_collector.py --dry-run
 
       - name: Live cycle
         if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run) }}
@@ -41,8 +43,24 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/live_collector.py
+
+      - name: Commit master_log if changed
+        if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run) }}
         run: |
-          python scripts/live_collector.py
+          if [ -f data/live_collection/master_log.csv ]; then
+            git config user.name "oracle-nba-bot"
+            git config user.email "bot@oracle-nba.local"
+            git add data/live_collection/master_log.csv
+            if git diff --staged --quiet; then
+              echo "No master_log changes to commit"
+            else
+              git commit -m "data(live): append odds snapshots [skip ci]"
+              git push
+            fi
+          else
+            echo "No master_log.csv yet (no games in window)"
+          fi
 
       - name: Upload master_log artifact
         if: always()
