@@ -9,6 +9,7 @@ Secrets (env only — never hardcode):
 
 Windows: T-6h / T-1h / T-10m (±12 min). Sparse pulls only.
 Model: Elo from data/processed/elo_ratings.json (preferred) or games_clean.csv.
+Aliases: config/team_aliases.json
 Edge at T-10m vs de-vigged market; Telegram only if |edge| >= 3% and not --dry-run.
 """
 
@@ -87,22 +88,38 @@ def optional_env(name: str) -> str:
 
 
 _ELO_CACHE: dict[str, float] | None = None
-_TEAM_ALIASES = {
-    "LA Clippers": "Los Angeles Clippers",
-    "LA Lakers": "Los Angeles Lakers",
-    "NY Knicks": "New York Knicks",
-    "GS Warriors": "Golden State Warriors",
-    "SA Spurs": "San Antonio Spurs",
-    "NO Pelicans": "New Orleans Pelicans",
-    "UT Jazz": "Utah Jazz",
-    "PHX Suns": "Phoenix Suns",
-    "PHO Suns": "Phoenix Suns",
-}
+_TEAM_ALIASES: dict[str, str] | None = None
+
+
+def _load_aliases() -> dict[str, str]:
+    global _TEAM_ALIASES
+    if _TEAM_ALIASES is not None:
+        return _TEAM_ALIASES
+    path = ROOT / "config" / "team_aliases.json"
+    if path.exists():
+        import json
+
+        _TEAM_ALIASES = {str(k): str(v) for k, v in json.loads(path.read_text()).items()}
+        print(f"[aliases] loaded {len(_TEAM_ALIASES)} entries from {path.name}")
+    else:
+        _TEAM_ALIASES = {
+            "LA Clippers": "Los Angeles Clippers",
+            "LA Lakers": "Los Angeles Lakers",
+            "NY Knicks": "New York Knicks",
+            "GS Warriors": "Golden State Warriors",
+            "SA Spurs": "San Antonio Spurs",
+            "NO Pelicans": "New Orleans Pelicans",
+            "UT Jazz": "Utah Jazz",
+            "PHX Suns": "Phoenix Suns",
+            "PHO Suns": "Phoenix Suns",
+        }
+        print("[aliases] using built-in fallback map")
+    return _TEAM_ALIASES
 
 
 def _norm_team(name: str) -> str:
     n = (name or "").strip()
-    return _TEAM_ALIASES.get(n, n)
+    return _load_aliases().get(n, n)
 
 
 def _elo_expected(ra: float, rb: float) -> float:
