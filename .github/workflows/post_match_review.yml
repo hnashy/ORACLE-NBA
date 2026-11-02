@@ -1,0 +1,56 @@
+# ORACLE-NBA — morning structural review of prior night's live captures
+name: post-match-review
+
+on:
+  schedule:
+    - cron: "0 8 * * *"   # 08:00 UTC daily
+  workflow_dispatch:
+    inputs:
+      days_from:
+        description: "Odds API scores lookback (1-3)"
+        default: "3"
+
+permissions:
+  contents: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install --quiet requests
+
+      - name: Run post-match review
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: |
+          python scripts/post_match_review.py --days-from ${{ github.event.inputs.days_from || 3 }}
+
+      - name: Commit report if new
+        run: |
+          if ls reports/live_reviews/review_*.md 1>/dev/null 2>&1; then
+            git config user.name "oracle-nba-bot"
+            git config user.email "bot@oracle-nba.local"
+            git add reports/live_reviews/
+            if git diff --staged --quiet; then
+              echo "No report changes"
+            else
+              git commit -m "report(live): post-match review [skip ci]"
+              git push
+            fi
+          fi
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-review
+          path: reports/live_reviews/
+          if-no-files-found: ignore
+          retention-days: 30
