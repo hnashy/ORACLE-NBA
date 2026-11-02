@@ -8,7 +8,7 @@ Secrets (env only — never hardcode):
   TELEGRAM_CHAT_ID      optional until alerts
 
 Windows: T-6h / T-1h / T-10m (±12 min). Sparse pulls only.
-Model: Elo rebuilt from data/processed/games_clean.csv (home-court +100).
+Model: Elo from data/processed/elo_ratings.json (preferred) or games_clean.csv.
 Edge at T-10m vs de-vigged market; Telegram only if |edge| >= 3% and not --dry-run.
 """
 
@@ -46,7 +46,7 @@ WINDOWS = {
 WINDOW_TOLERANCE = timedelta(minutes=12)
 EDGE_THRESHOLD = 0.03
 ELO_K = 20.0
-ELO_HCA = 100.0  # home-court advantage in Elo points
+ELO_HCA = 100.0
 ELO_DEFAULT = 1500.0
 
 CSV_FIELDS = [
@@ -113,6 +113,17 @@ def build_elo_ratings(path: Path = GAMES_CLEAN) -> dict[str, float]:
     global _ELO_CACHE
     if _ELO_CACHE is not None:
         return _ELO_CACHE
+
+    snap = ROOT / "data" / "processed" / "elo_ratings.json"
+    if snap.exists():
+        import json
+
+        data = json.loads(snap.read_text())
+        ratings = {str(k): float(v) for k, v in (data.get("ratings") or {}).items()}
+        _ELO_CACHE = ratings
+        print(f"[elo] loaded {len(ratings)} teams from {snap.name}")
+        return ratings
+
     if not path.exists():
         print(f"[WARN] games_clean not found at {path}; Elo defaults to {ELO_DEFAULT}")
         _ELO_CACHE = {}
@@ -124,7 +135,7 @@ def build_elo_ratings(path: Path = GAMES_CLEAN) -> dict[str, float]:
     df = df.dropna(subset=["gh", "ga"])
     df["date"] = pd.to_datetime(df["date"], utc=True)
     df = df.sort_values("date")
-    ratings: dict[str, float] = {}
+    ratings = {}
 
     def get(t: str) -> float:
         return ratings.get(t, ELO_DEFAULT)
@@ -134,11 +145,11 @@ def build_elo_ratings(path: Path = GAMES_CLEAN) -> dict[str, float]:
         rh, ra = get(h), get(a)
         eh = _elo_expected(rh + ELO_HCA, ra)
         if r["gh"] > r["ga"]:
-            sh, sa = 1.0, 0.0
+            sh = 1.0
         elif r["gh"] < r["ga"]:
-            sh, sa = 0.0, 1.0
+            sh = 0.0
         else:
-            sh, sa = 0.5, 0.5
+            sh = 0.5
         ratings[h] = rh + ELO_K * (sh - eh)
         ratings[a] = ra + ELO_K * ((1.0 - sh) - (1.0 - eh))
 
@@ -148,14 +159,12 @@ def build_elo_ratings(path: Path = GAMES_CLEAN) -> dict[str, float]:
 
 
 def load_model_prob(home_team: str, away_team: str, tip: str | None = None) -> float | None:
-    """Home-win probability from current Elo ratings (+ home-court)."""
     ratings = build_elo_ratings()
     h = _norm_team(home_team)
     a = _norm_team(away_team)
     rh = ratings.get(h, ELO_DEFAULT)
     ra = ratings.get(a, ELO_DEFAULT)
-    p = _elo_expected(rh + ELO_HCA, ra)
-    return float(p)
+    return float(_elo_expected(rh + ELO_HCA, ra))
 
 
 def utcnow() -> datetime:
@@ -267,13 +276,7 @@ def active_window_label(tip_utc: datetime, now: datetime) -> str | None:
     return None
 
 
-def maybe_telegram_alert(
-    summary: dict,
-    edge: float,
-    side: str,
-    *,
-    dry_run: bool,
-) -> None:
+def maybe_telegram_alert(summary: dict, edge: float, side: str, *, dry_run: bool) -> None:
     msg = (
         f"PAPER EDGE {side}\n"
         f"{summary.get('away_team')} @ {summary.get('home_team')}\n"
@@ -286,7 +289,6 @@ def maybe_telegram_alert(
     if dry_run:
         print("[telegram DRY-RUN — not sent]\n" + msg)
         return
-
     token = optional_env("TELEGRAM_BOT_TOKEN")
     chat = optional_env("TELEGRAM_CHAT_ID")
     if not token or not chat:
@@ -320,7 +322,6 @@ def consensus_devig_home(rows: list[dict]) -> float | None:
 def run_once(api_key: str, dry_run: bool = False) -> dict:
     now = utcnow()
     build_elo_ratings()
-
     events, headers = fetch_odds(api_key)
     credits = headers.get("x-requests-remaining", "")
     used = headers.get("x-requests-used", "")
@@ -328,11 +329,9 @@ def run_once(api_key: str, dry_run: bool = False) -> dict:
         f"[{now.isoformat()}] API OK events={len(events)} "
         f"credits_remaining={credits} used={used} dry_run={dry_run}"
     )
-
     all_rows: list[dict] = []
     games_in_window = 0
     signals = 0
-
     for ev in events:
         tip_s = ev.get("commence_time")
         if not tip_s:
@@ -342,26 +341,21 @@ def run_once(api_key: str, dry_run: bool = False) -> dict:
         if not label:
             continue
         games_in_window += 1
-
         elo_p = load_model_prob(ev.get("home_team", ""), ev.get("away_team", ""), tip_s)
         provisional = parse_event_rows(ev, now, label, str(credits), None, None, None)
         mkt_p = consensus_devig_home(provisional)
         edge = None if (elo_p is None or mkt_p is None) else (elo_p - mkt_p)
-
         rows = parse_event_rows(ev, now, label, str(credits), elo_p, mkt_p, edge)
         all_rows.extend(rows)
-
         print(
             f"  WINDOW {label} | {ev.get('away_team')} @ {ev.get('home_team')} "
             f"| tip={tip_s} | elo_p={elo_p and round(elo_p,3)} "
             f"| mkt_p={mkt_p and round(mkt_p,3)} | edge={edge and round(edge,3)}"
         )
-
         if label == "T-10m" and edge is not None and abs(edge) >= EDGE_THRESHOLD:
             side = "HOME" if edge > 0 else "AWAY"
             maybe_telegram_alert(rows[0], abs(edge), side, dry_run=dry_run)
             signals += 1
-
     if all_rows and not dry_run:
         append_rows(all_rows)
         print(f"wrote {len(all_rows)} rows → {MASTER_LOG}")
@@ -370,7 +364,6 @@ def run_once(api_key: str, dry_run: bool = False) -> dict:
             f"no CSV write (dry_run={dry_run} or empty) "
             f"rows={len(all_rows)} games_in_window={games_in_window}"
         )
-
     return {
         "api_ok": True,
         "events_total": len(events),
