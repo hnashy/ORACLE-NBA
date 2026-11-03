@@ -1,10 +1,11 @@
 # ORACLE-NBA Path A — sparse live collector
-# Every 15 min. Writes only when a game is inside T-6h / T-1h / T-10m (±12 min).
+# TEMP (1 week): every 5 min to guarantee T-1h capture (±12 min window).
+# Revert to */15 if credits_remaining drops sharply (<450 after ~2 days).
 name: live-collector
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
