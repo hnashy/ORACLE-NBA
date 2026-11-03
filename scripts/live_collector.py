@@ -356,6 +356,12 @@ def run_once(api_key: str, dry_run: bool = False) -> dict:
         tip = datetime.fromisoformat(tip_s.replace("Z", "+00:00"))
         label = active_window_label(tip, now)
         if not label:
+            mins = (tip - now).total_seconds() / 60.0
+            if 48 <= mins <= 72:
+                print(
+                    f"  [NEAR_MISS T-1h] {ev.get('away_team')} @ {ev.get('home_team')} "
+                    f"mins_to_tip={mins:.1f} (tolerance=±12 around T-60)"
+                )
             continue
         games_in_window += 1
         elo_p = load_model_prob(ev.get("home_team", ""), ev.get("away_team", ""), tip_s)
@@ -366,8 +372,8 @@ def run_once(api_key: str, dry_run: bool = False) -> dict:
         all_rows.extend(rows)
         print(
             f"  WINDOW {label} | {ev.get('away_team')} @ {ev.get('home_team')} "
-            f"| tip={tip_s} | elo_p={elo_p and round(elo_p,3)} "
-            f"| mkt_p={mkt_p and round(mkt_p,3)} | edge={edge and round(edge,3)}"
+            f"| tip={tip_s} | elo_p={elo_p and round(elo_p, 3)} "
+            f"| mkt_p={mkt_p and round(mkt_p, 3)} | edge={edge and round(edge, 3)}"
         )
         if label == "T-10m" and edge is not None and abs(edge) >= EDGE_THRESHOLD:
             side = "HOME" if edge > 0 else "AWAY"
