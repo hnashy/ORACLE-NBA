@@ -1,0 +1,21 @@
+{
+  "_comment": "Tier 1 = franchise star (-20 Elo), Tier 2 = high-usage starter/role star (-5). Names match ESPN athlete.displayName when possible.",
+  "tier1": [
+    "Stephen Curry", "LeBron James", "Kevin Durant", "Nikola Jokic", "Giannis Antetokounmpo",
+    "Luka Doncic", "Joel Embiid", "Jayson Tatum", "Shai Gilgeous-Alexander", "Anthony Edwards",
+    "Kawhi Leonard", "Jimmy Butler", "Damian Lillard", "Devin Booker", "Ja Morant",
+    "Tyrese Haliburton", "Donovan Mitchell", "Kyrie Irving", "Anthony Davis", "Victor Wembanyama",
+    "Jalen Brunson", "Zion Williamson", "Trae Young", "Paolo Banchero", "Cade Cunningham",
+    "Chet Holmgren", "Jalen Williams", "Brandon Ingram", "Bradley Beal", "Dejounte Murray",
+    "Trey Murphy III", "Karl-Anthony Towns", "Jaylen Brown", "Pascal Siakam"
+  ],
+  "tier2": [
+    "Draymond Green", "Al Horford", "Klay Thompson", "Andrew Wiggins", "De'Anthony Melton",
+    "Brandin Podziemski", "Moses Moody", "Kristaps Porzingis", "Rui Hachimura", "Derrick Jones Jr.",
+    "Fred VanVleet", "Alperen Sengun", "Jalen Green", "Scottie Barnes", "RJ Barrett",
+    "Immanuel Quickley", "Jakob Poeltl", "Bam Adebayo", "Tyler Herro", "Lauri Markkanen",
+    "Franz Wagner", "Jalen Suggs", "Mikal Bridges", "OG Anunoby", "Julius Randle",
+    "Darius Garland", "Evan Mobley", "Jarrett Allen", "Desmond Bane",
+    "Cason Wallace", "Alex Caruso", "Isaiah Hartenstein", "Cooper Flagg", "P.J. Washington"
+  ]
+}
