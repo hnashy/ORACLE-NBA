@@ -8,9 +8,9 @@ Secrets (env only — never hardcode):
   TELEGRAM_CHAT_ID      optional until alerts
 
 Windows: T-6h / T-1h / T-10m (±12 min). Sparse pulls only.
-Model: Elo from data/processed/elo_ratings.json (preferred) or games_clean.csv.
+Model: Injury-aware Elo (scripts/injury_adjuster.py) with fallback to raw Elo.
 Aliases: config/team_aliases.json
-Edge at T-10m vs de-vigged market; Telegram only if |edge| >= 3% and not --dry-run.
+Edge at T-10m vs de-vigged market; Telegram Arabic paper alerts if |edge| >= 3%.
 """
 
 from __future__ import annotations
@@ -46,6 +46,7 @@ WINDOWS = {
 }
 WINDOW_TOLERANCE = timedelta(minutes=12)
 EDGE_THRESHOLD = 0.03
+SUSPECT_EDGE = 0.15
 ELO_K = 20.0
 ELO_HCA = 100.0
 ELO_DEFAULT = 1500.0
@@ -89,6 +90,7 @@ def optional_env(name: str) -> str:
 
 _ELO_CACHE: dict[str, float] | None = None
 _TEAM_ALIASES: dict[str, str] | None = None
+_INJURY_CACHE: dict | None = None
 
 
 def _load_aliases() -> dict[str, str]:
@@ -175,13 +177,43 @@ def build_elo_ratings(path: Path = GAMES_CLEAN) -> dict[str, float]:
     return ratings
 
 
+def _get_injury_board():
+    global _INJURY_CACHE
+    if _INJURY_CACHE is not None:
+        return _INJURY_CACHE
+    try:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from injury_adjuster import get_injuries
+
+        _INJURY_CACHE = get_injuries(force_refresh=True)
+    except Exception as e:
+        print(f"[injury] unavailable ({e}) — raw Elo fallback")
+        _INJURY_CACHE = {}
+    return _INJURY_CACHE
+
+
 def load_model_prob(home_team: str, away_team: str, tip: str | None = None) -> float | None:
+    """Injury-aware home win probability; falls back to raw Elo."""
     ratings = build_elo_ratings()
     h = _norm_team(home_team)
     a = _norm_team(away_team)
-    rh = ratings.get(h, ELO_DEFAULT)
-    ra = ratings.get(a, ELO_DEFAULT)
-    return float(_elo_expected(rh + ELO_HCA, ra))
+    try:
+        from injury_adjuster import adjusted_home_win_prob
+
+        by = _get_injury_board()
+        p, meta = adjusted_home_win_prob(ratings, h, a, hca=ELO_HCA, by_team=by)
+        if meta.get("home_penalty") or meta.get("away_penalty"):
+            print(
+                f"  [injury-adj] {a} @ {h} "
+                f"H_pen={meta.get('home_penalty',0)} A_pen={meta.get('away_penalty',0)} "
+                f"p={p:.3f}"
+            )
+        return float(p)
+    except Exception as e:
+        print(f"[injury] adjust failed ({e}); raw Elo")
+        rh = ratings.get(h, ELO_DEFAULT)
+        ra = ratings.get(a, ELO_DEFAULT)
+        return float(_elo_expected(rh + ELO_HCA, ra))
 
 
 def utcnow() -> datetime:
@@ -294,15 +326,45 @@ def active_window_label(tip_utc: datetime, now: datetime) -> str | None:
 
 
 def maybe_telegram_alert(summary: dict, edge: float, side: str, *, dry_run: bool) -> None:
+    """Arabic paper-trading alert (no real money)."""
+    away = summary.get("away_team") or "?"
+    home = summary.get("home_team") or "?"
+    window = summary.get("window_label") or "?"
+    elo_p = summary.get("elo_home_p")
+    mkt_p = summary.get("market_home_p_devig")
+    tip_side_ar = "المضيف" if side == "HOME" else "الضيف"
+    tip_team = home if side == "HOME" else away
+    mkt_fav = home if (mkt_p is not None and float(mkt_p) >= 0.5) else away
+    mkt_pct = (float(mkt_p) * 100) if mkt_p is not None else 0.0
+    if mkt_p is not None and float(mkt_p) < 0.5:
+        mkt_pct = (1.0 - float(mkt_p)) * 100
+    model_pct = (float(elo_p) * 100) if elo_p is not None else 0.0
+    if side == "AWAY" and elo_p is not None:
+        model_pct = (1.0 - float(elo_p)) * 100
+
+    suspect = ""
+    if abs(edge) >= SUSPECT_EDGE:
+        suspect = (
+            "\n⚠️ تحذير: فجوة كبيرة جداً – قد تكون هناك معلومات سوقية غير مسعّرة "
+            "أو نقص في بيانات الإصابات."
+        )
+
     msg = (
-        f"PAPER EDGE {side}\n"
-        f"{summary.get('away_team')} @ {summary.get('home_team')}\n"
-        f"edge={edge:.1%} window={summary.get('window_label')}\n"
-        f"elo_p={summary.get('elo_home_p')} mkt_p={summary.get('market_home_p_devig')}\n"
-        f"ml_home={summary.get('ml_home_odds')} total={summary.get('total_line')}\n"
-        f"capture={summary.get('timestamp_utc_capture')}\n"
-        f"(paper only — no real wager)"
+        "🚨 إشارة ورقية جديدة (Paper Signal)\n"
+        "\n"
+        f"⏱️ النافذة: {window}\n"
+        f"📅 المباراة: {away} ضد {home}\n"
+        "\n"
+        "💡 التحليل:\n"
+        f"• السوق يرجّح فوز: {mkt_fav} بنسبة {mkt_pct:.1f}%\n"
+        f"• نموذجنا (Elo + إصابات) يرجّح: {tip_team} بنسبة {model_pct:.1f}%\n"
+        f"• الفرق (Edge): {abs(edge)*100:.1f}%\n"
+        "\n"
+        f"🎯 التوصية النظرية: {tip_side_ar} — {tip_team}\n"
+        "⚠️ تحذير: هذه إشارة للتوثيق فقط. لا يوجد رهان حقيقي."
+        f"{suspect}"
     )
+
     if dry_run:
         print("[telegram DRY-RUN — not sent]\n" + msg)
         return
@@ -339,6 +401,7 @@ def consensus_devig_home(rows: list[dict]) -> float | None:
 def run_once(api_key: str, dry_run: bool = False) -> dict:
     now = utcnow()
     build_elo_ratings()
+    _get_injury_board()
     events, headers = fetch_odds(api_key)
     credits = headers.get("x-requests-remaining", "")
     used = headers.get("x-requests-used", "")
