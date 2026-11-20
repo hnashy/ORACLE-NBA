@@ -8,6 +8,12 @@ on:
     inputs:
       days_from:
         description: "Odds API scores lookback (1-3)"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "3"
+        required: false
         default: "3"
 
 permissions:
@@ -30,8 +36,13 @@ jobs:
       - name: Run post-match review
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          DAYS_FROM: ${{ github.event.inputs.days_from || '3' }}
         run: |
-          python scripts/post_match_review.py --days-from ${{ github.event.inputs.days_from || 3 }}
+          case "$DAYS_FROM" in
+            1|2|3) ;;
+            *) echo "::error::days_from must be one of 1, 2, or 3"; exit 1 ;;
+          esac
+          python scripts/post_match_review.py --days-from "$DAYS_FROM"
 
       - name: Commit report if new
         run: |
