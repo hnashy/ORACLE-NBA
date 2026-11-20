@@ -430,6 +430,8 @@ def render_markdown(summaries: list[dict[str, Any]], meta: dict[str, Any]) -> st
 
 
 def run(days_from: int = 3, report_date: str | None = None) -> Path:
+    if type(days_from) is not int or days_from not in (1, 2, 3):
+        raise ValueError("days_from must be one of 1, 2, or 3")
     api_key = require_env("ODDS_API_KEY")
     aliases = load_aliases()
     rows = load_master_log()
@@ -467,7 +469,13 @@ def run(days_from: int = 3, report_date: str | None = None) -> Path:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="ORACLE-NBA post-match structural review")
-    ap.add_argument("--days-from", type=int, default=3, help="Odds API scores lookback")
+    ap.add_argument(
+        "--days-from",
+        type=int,
+        choices=(1, 2, 3),
+        default=3,
+        help="Odds API scores lookback",
+    )
     ap.add_argument("--date", type=str, default=None, help="Report date YYYY-MM-DD")
     args = ap.parse_args()
     run(days_from=args.days_from, report_date=args.date)
