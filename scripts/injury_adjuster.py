@@ -15,7 +15,7 @@ Penalties (initial, tunable):
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,7 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 CACHE_PATH = ROOT / "data" / "injuries" / "latest_injuries.json"
 STAR_PATH = ROOT / "config" / "star_tiers.json"
+CACHE_MAX_AGE = timedelta(hours=12)
 
 ESPN_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
 USER_AGENT = "ORACLE-NBA-injury-adjuster/1.0 (paper research; contact: local)"
@@ -103,7 +104,20 @@ def load_cache() -> dict[str, list[dict[str, Any]]] | None:
         return None
     try:
         data = json.loads(CACHE_PATH.read_text())
-        return data.get("teams") or {}
+        fetched_at = data.get("fetched_at_utc")
+        if not isinstance(fetched_at, str) or not fetched_at:
+            print("[injury] cache has no fetch timestamp — rejecting")
+            return None
+        fetched = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+        if fetched.tzinfo is None:
+            print("[injury] cache timestamp has no timezone — rejecting")
+            return None
+        age = datetime.now(timezone.utc) - fetched.astimezone(timezone.utc)
+        if age < timedelta(0) or age > CACHE_MAX_AGE:
+            print(f"[injury] cache stale or future-dated (age={age}) — rejecting")
+            return None
+        teams = data.get("teams")
+        return teams if isinstance(teams, dict) else None
     except Exception:
         return None
 
@@ -120,7 +134,7 @@ def get_injuries(*, force_refresh: bool = False) -> dict[str, list[dict[str, Any
         if cached is not None:
             print(f"[injury] using cache ({CACHE_PATH.name})")
             return cached
-        print("[injury] no cache — zero penalties")
+        print("[injury] no usable cache — zero penalties")
         return {}
 
 

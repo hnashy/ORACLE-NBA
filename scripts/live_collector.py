@@ -68,6 +68,7 @@ CSV_FIELDS = [
     "elo_home_p",
     "market_home_p_devig",
     "edge_home",
+    "telegram_alert_sent",
 ]
 
 
@@ -240,6 +241,24 @@ def ensure_log_header() -> None:
     if not MASTER_LOG.exists():
         with MASTER_LOG.open("w", newline="") as f:
             csv.DictWriter(f, fieldnames=CSV_FIELDS).writeheader()
+        return
+    with MASTER_LOG.open(newline="") as f:
+        reader = csv.DictReader(f)
+        old_fields = reader.fieldnames or []
+        if all(field in old_fields for field in CSV_FIELDS):
+            return
+        old_rows = list(reader)
+    fieldnames = old_fields + [field for field in CSV_FIELDS if field not in old_fields]
+    temp_path = MASTER_LOG.with_name(MASTER_LOG.name + ".tmp")
+    try:
+        with temp_path.open("w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            for row in old_rows:
+                writer.writerow({field: row.get(field) for field in fieldnames})
+        os.replace(temp_path, MASTER_LOG)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def append_rows(rows: list[dict[str, Any]]) -> None:
@@ -248,6 +267,19 @@ def append_rows(rows: list[dict[str, Any]]) -> None:
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         for r in rows:
             w.writerow({k: r.get(k) for k in CSV_FIELDS})
+
+
+def load_alerted_game_ids(path: Path | None = None) -> set[str]:
+    """Return game IDs with a successfully delivered Telegram alert in the log."""
+    path = MASTER_LOG if path is None else path
+    if not path.exists():
+        return set()
+    with path.open(newline="") as f:
+        return {
+            row["game_id"]
+            for row in csv.DictReader(f)
+            if row.get("game_id") and row.get("telegram_alert_sent", "").lower() == "true"
+        }
 
 
 def fetch_odds(api_key: str) -> tuple[list[dict], dict]:
@@ -325,7 +357,7 @@ def active_window_label(tip_utc: datetime, now: datetime) -> str | None:
     return None
 
 
-def maybe_telegram_alert(summary: dict, edge: float, side: str, *, dry_run: bool) -> None:
+def maybe_telegram_alert(summary: dict, edge: float, side: str, *, dry_run: bool) -> bool:
     """Arabic paper-trading alert (no real money)."""
     away = summary.get("away_team") or "?"
     home = summary.get("home_team") or "?"
@@ -367,22 +399,25 @@ def maybe_telegram_alert(summary: dict, edge: float, side: str, *, dry_run: bool
 
     if dry_run:
         print("[telegram DRY-RUN — not sent]\n" + msg)
-        return
+        return False
     token = optional_env("TELEGRAM_BOT_TOKEN")
     chat = optional_env("TELEGRAM_CHAT_ID")
     if not token or not chat:
         print("[telegram skipped — TELEGRAM_BOT_TOKEN/CHAT_ID missing]")
         print(msg)
-        return
+        return False
     if requests is None:
         print("[telegram skipped — requests missing]")
-        return
+        return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
         r = requests.post(url, json={"chat_id": chat, "text": msg}, timeout=15)
+        r.raise_for_status()
         print(f"[telegram] status={r.status_code}")
+        return True
     except Exception as e:
         print(f"[telegram error] {e}")
+        return False
 
 
 def consensus_devig_home(rows: list[dict]) -> float | None:
@@ -412,6 +447,7 @@ def run_once(api_key: str, dry_run: bool = False) -> dict:
     all_rows: list[dict] = []
     games_in_window = 0
     signals = 0
+    alerted_game_ids = load_alerted_game_ids()
     for ev in events:
         tip_s = ev.get("commence_time")
         if not tip_s:
@@ -439,9 +475,17 @@ def run_once(api_key: str, dry_run: bool = False) -> dict:
             f"| mkt_p={mkt_p and round(mkt_p, 3)} | edge={edge and round(edge, 3)}"
         )
         if label == "T-10m" and edge is not None and abs(edge) >= EDGE_THRESHOLD:
-            side = "HOME" if edge > 0 else "AWAY"
-            maybe_telegram_alert(rows[0], abs(edge), side, dry_run=dry_run)
             signals += 1
+            game_id = str(ev.get("id") or "")
+            if game_id and game_id in alerted_game_ids:
+                print(f"[telegram suppressed — already alerted for game {game_id}]")
+            else:
+                side = "HOME" if edge > 0 else "AWAY"
+                sent = maybe_telegram_alert(rows[0], abs(edge), side, dry_run=dry_run)
+                if sent and game_id:
+                    alerted_game_ids.add(game_id)
+                    for row in rows:
+                        row["telegram_alert_sent"] = "true"
     if all_rows and not dry_run:
         append_rows(all_rows)
         print(f"wrote {len(all_rows)} rows → {MASTER_LOG}")
