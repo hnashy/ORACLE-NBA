@@ -158,8 +158,26 @@ class TelegramReviewWebhookTests(unittest.TestCase):
                 {"home_team": "Home", "away_team": "Away"}, 0.04, "HOME", dry_run=False
             )
 
-        self.assertFalse(sent)
+        self.assertTrue(sent)
         self.assertEqual(post.call_count, 1)
+
+    def test_manual_send_keeps_http_success_without_review_secret(self) -> None:
+        telegram_response = self._telegram_success()
+        telegram_response.json.return_value = {"ok": False, "description": "not confirmed"}
+        with (
+            patch.dict("os.environ", {
+                "TELEGRAM_BOT_TOKEN": "test-token",
+                "TELEGRAM_CHAT_ID": "test-chat",
+            }, clear=True),
+            patch.object(live_collector.requests, "post", return_value=telegram_response) as post,
+        ):
+            sent = live_collector.maybe_telegram_alert(
+                {"home_team": "Home", "away_team": "Away"}, 0.04, "HOME", dry_run=False
+            )
+
+        self.assertTrue(sent)
+        self.assertEqual(post.call_count, 1)
+        telegram_response.json.assert_not_called()
 
     def test_no_review_copy_when_telegram_http_request_fails(self) -> None:
         with (

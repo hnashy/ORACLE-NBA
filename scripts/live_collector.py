@@ -430,15 +430,14 @@ def maybe_telegram_alert(summary: dict, edge: float, side: str, *, dry_run: bool
     try:
         r = requests.post(url, json={"chat_id": chat, "text": msg}, timeout=15)
         r.raise_for_status()
-        try:
-            telegram_result = r.json()
-        except Exception:
-            telegram_result = None
-        if not isinstance(telegram_result, dict) or telegram_result.get("ok") is not True:
-            print("[telegram error] API did not confirm success")
-            return False
         print(f"[telegram] status={r.status_code}")
-        send_telegram_review_copy(msg)
+        if optional_env("TELEGRAM_REVIEW_WEBHOOK_URL"):
+            try:
+                telegram_result = r.json()
+            except Exception:
+                telegram_result = None
+            if isinstance(telegram_result, dict) and telegram_result.get("ok") is True:
+                send_telegram_review_copy(msg)
         return True
     except Exception:
         # Avoid exposing request URLs or credentials through exception messages.
