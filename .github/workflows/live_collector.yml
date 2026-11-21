@@ -48,6 +48,7 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_REVIEW_WEBHOOK_URL: ${{ github.event_name == 'schedule' && secrets.TELEGRAM_REVIEW_WEBHOOK_URL || '' }}
         run: python scripts/live_collector.py
 
       - name: Commit master_log if changed

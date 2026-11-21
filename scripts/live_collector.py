@@ -89,6 +89,23 @@ def optional_env(name: str) -> str:
     return os.environ.get(name, "").strip()
 
 
+def send_telegram_review_copy(msg: str) -> None:
+    """Best-effort review copy; never let webhook failures affect Telegram."""
+    webhook_url = optional_env("TELEGRAM_REVIEW_WEBHOOK_URL")
+    if not webhook_url or requests is None:
+        return
+    try:
+        response = requests.post(
+            webhook_url,
+            json={"source": "ORACLE-NBA", "text": msg},
+            timeout=15,
+        )
+        response.raise_for_status()
+    except Exception:
+        # Do not log exceptions: request errors can include the secret webhook URL.
+        print("[review webhook] delivery failed")
+
+
 _ELO_CACHE: dict[str, float] | None = None
 _TEAM_ALIASES: dict[str, str] | None = None
 _INJURY_CACHE: dict | None = None
@@ -413,10 +430,19 @@ def maybe_telegram_alert(summary: dict, edge: float, side: str, *, dry_run: bool
     try:
         r = requests.post(url, json={"chat_id": chat, "text": msg}, timeout=15)
         r.raise_for_status()
+        try:
+            telegram_result = r.json()
+        except Exception:
+            telegram_result = None
+        if not isinstance(telegram_result, dict) or telegram_result.get("ok") is not True:
+            print("[telegram error] API did not confirm success")
+            return False
         print(f"[telegram] status={r.status_code}")
+        send_telegram_review_copy(msg)
         return True
-    except Exception as e:
-        print(f"[telegram error] {e}")
+    except Exception:
+        # Avoid exposing request URLs or credentials through exception messages.
+        print("[telegram error] request failed")
         return False
 
 

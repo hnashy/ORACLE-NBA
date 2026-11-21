@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -111,6 +112,113 @@ class TelegramDeduplicationTests(unittest.TestCase):
             self.assertTrue(any(row.get("telegram_alert_sent") == "true" for row in rows))
             self.assertEqual(len(rows), 3)
             self.assertEqual(rows[0]["game_id"], "historical-game")
+
+
+class TelegramReviewWebhookTests(unittest.TestCase):
+    def _telegram_success(self):
+        response = Mock(status_code=200)
+        response.json.return_value = {"ok": True, "result": {}}
+        return response
+
+    def test_review_copy_follows_confirmed_telegram_success(self) -> None:
+        telegram_response = self._telegram_success()
+        webhook_response = Mock(status_code=204)
+        webhook_url = "https://review.example.invalid/hook-secret"
+        with (
+            patch.dict("os.environ", {
+                "TELEGRAM_BOT_TOKEN": "test-token",
+                "TELEGRAM_CHAT_ID": "test-chat",
+                "TELEGRAM_REVIEW_WEBHOOK_URL": webhook_url,
+            }),
+            patch.object(live_collector.requests, "post", side_effect=[telegram_response, webhook_response]) as post,
+        ):
+            sent = live_collector.maybe_telegram_alert(
+                {"home_team": "Home", "away_team": "Away"}, 0.04, "HOME", dry_run=False
+            )
+
+        self.assertTrue(sent)
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(
+            post.call_args_list[1].kwargs["json"],
+            {"source": "ORACLE-NBA", "text": post.call_args_list[0].kwargs["json"]["text"]},
+        )
+
+    def test_no_review_copy_when_telegram_does_not_confirm_success(self) -> None:
+        telegram_response = self._telegram_success()
+        telegram_response.json.return_value = {"ok": False, "description": "rejected"}
+        with (
+            patch.dict("os.environ", {
+                "TELEGRAM_BOT_TOKEN": "test-token",
+                "TELEGRAM_CHAT_ID": "test-chat",
+                "TELEGRAM_REVIEW_WEBHOOK_URL": "https://review.example.invalid/hook-secret",
+            }),
+            patch.object(live_collector.requests, "post", return_value=telegram_response) as post,
+        ):
+            sent = live_collector.maybe_telegram_alert(
+                {"home_team": "Home", "away_team": "Away"}, 0.04, "HOME", dry_run=False
+            )
+
+        self.assertFalse(sent)
+        self.assertEqual(post.call_count, 1)
+
+    def test_no_review_copy_when_telegram_http_request_fails(self) -> None:
+        with (
+            patch.dict("os.environ", {
+                "TELEGRAM_BOT_TOKEN": "test-token",
+                "TELEGRAM_CHAT_ID": "test-chat",
+                "TELEGRAM_REVIEW_WEBHOOK_URL": "https://review.example.invalid/hook-secret",
+            }),
+            patch.object(
+                live_collector.requests,
+                "post",
+                side_effect=live_collector.requests.HTTPError("Telegram request failed"),
+            ) as post,
+        ):
+            sent = live_collector.maybe_telegram_alert(
+                {"home_team": "Home", "away_team": "Away"}, 0.04, "HOME", dry_run=False
+            )
+
+        self.assertFalse(sent)
+        self.assertEqual(post.call_count, 1)
+
+    def test_webhook_failure_is_best_effort_and_does_not_log_url(self) -> None:
+        telegram_response = self._telegram_success()
+        webhook_url = "https://review.example.invalid/hook-secret"
+        with (
+            patch.dict("os.environ", {
+                "TELEGRAM_BOT_TOKEN": "test-token",
+                "TELEGRAM_CHAT_ID": "test-chat",
+                "TELEGRAM_REVIEW_WEBHOOK_URL": webhook_url,
+            }),
+            patch.object(
+                live_collector.requests,
+                "post",
+                side_effect=[telegram_response, RuntimeError(f"failed {webhook_url}")],
+            ),
+            patch("sys.stdout", new_callable=io.StringIO) as output,
+        ):
+            sent = live_collector.maybe_telegram_alert(
+                {"home_team": "Home", "away_team": "Away"}, 0.04, "HOME", dry_run=False
+            )
+
+        self.assertTrue(sent)
+        self.assertNotIn(webhook_url, output.getvalue())
+
+    def test_dry_run_does_not_send_telegram_or_review_copy(self) -> None:
+        with (
+            patch.dict("os.environ", {
+                "TELEGRAM_BOT_TOKEN": "test-token",
+                "TELEGRAM_CHAT_ID": "test-chat",
+                "TELEGRAM_REVIEW_WEBHOOK_URL": "https://review.example.invalid/hook-secret",
+            }),
+            patch.object(live_collector.requests, "post") as post,
+        ):
+            sent = live_collector.maybe_telegram_alert(
+                {"home_team": "Home", "away_team": "Away"}, 0.04, "HOME", dry_run=True
+            )
+
+        self.assertFalse(sent)
+        post.assert_not_called()
 
 
 class DaysFromValidationTests(unittest.TestCase):
